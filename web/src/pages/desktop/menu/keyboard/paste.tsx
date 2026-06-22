@@ -24,7 +24,6 @@ export const Paste = () => {
 
   function onChange(e: ChangeEvent<HTMLTextAreaElement>) {
     const value = e.target.value;
-    setStatus(isASCII(value) ? '' : 'error');
     setInputValue(value);
   }
 
@@ -55,15 +54,6 @@ export const Paste = () => {
     }
 
     setIsKeyboardEnable(!open);
-  }
-
-  function isASCII(value: string) {
-    for (let i = 0; i < value.length; i++) {
-      if (value.charCodeAt(i) > 127) {
-        return false;
-      }
-    }
-    return true;
   }
 
   return (

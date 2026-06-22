@@ -35,84 +35,184 @@ func (s *Service) Paste(c *gin.Context) {
 	keyUp := []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
 
 	for _, char := range req.Content {
-		key, ok := CharMap[char]
+		// Accented characters (and standalone dead-key glyphs) expand to a
+		// sequence of keystrokes — a dead key followed by the base letter or a
+		// space. Plain characters resolve to a single keystroke via CharMap.
+		seq, ok := ComposedMap[char]
 		if !ok {
-			log.Debugf("unknown key '%c' (rune: %d)", char, char)
-			continue
+			key, single := CharMap[char]
+			if !single {
+				log.Debugf("unknown key '%c' (rune: %d)", char, char)
+				continue
+			}
+			seq = []Char{key}
 		}
 
-		keyDown := []byte{byte(key.Modifiers), 0x00, byte(key.Code), 0x00, 0x00, 0x00, 0x00, 0x00}
+		for _, key := range seq {
+			keyDown := []byte{byte(key.Modifiers), 0x00, byte(key.Code), 0x00, 0x00, 0x00, 0x00, 0x00}
 
-		hid.WriteHid0(keyDown)
-		hid.WriteHid0(keyUp)
-		time.Sleep(50 * time.Millisecond)
+			hid.WriteHid0(keyDown)
+			hid.WriteHid0(keyUp)
+			time.Sleep(50 * time.Millisecond)
+		}
 	}
 
 	rsp.OkRsp(c)
 	log.Debugf("hid paste success, total %d characters processed", len(req.Content))
 }
 
-var CharMap = map[rune]Char{
-	// Lowercase letters
-	'a': {0, 4}, 'b': {0, 5}, 'c': {0, 6}, 'd': {0, 7}, 'e': {0, 8},
-	'f': {0, 9}, 'g': {0, 10}, 'h': {0, 11}, 'i': {0, 12}, 'j': {0, 13},
-	'k': {0, 14}, 'l': {0, 15}, 'm': {0, 16}, 'n': {0, 17}, 'o': {0, 18},
-	'p': {0, 19}, 'q': {0, 20}, 'r': {0, 21}, 's': {0, 22}, 't': {0, 23},
-	'u': {0, 24}, 'v': {0, 25}, 'w': {0, 26}, 'x': {0, 27}, 'y': {0, 28},
-	'z': {0, 29},
+// Modifier bit positions (USB HID boot keyboard report, byte 0).
+const (
+	ModNone  = 0
+	ModShift = 2    // Left Shift
+	ModAltGr = 0x40 // Right Alt (AltGr). KBDBR treats Right Alt as Ctrl+Alt.
+)
 
-	// Uppercase letters (Modifier 2 typically means Left Shift)
-	'A': {2, 4}, 'B': {2, 5}, 'C': {2, 6}, 'D': {2, 7}, 'E': {2, 8},
-	'F': {2, 9}, 'G': {2, 10}, 'H': {2, 11}, 'I': {2, 12}, 'J': {2, 13},
-	'K': {2, 14}, 'L': {2, 15}, 'M': {2, 16}, 'N': {2, 17}, 'O': {2, 18},
-	'P': {2, 19}, 'Q': {2, 20}, 'R': {2, 21}, 'S': {2, 22}, 'T': {2, 23},
-	'U': {2, 24}, 'V': {2, 25}, 'W': {2, 26}, 'X': {2, 27}, 'Y': {2, 28},
-	'Z': {2, 29},
+// Dead keys on the Brazilian ABNT (KBDBR) layout. They produce no character on
+// their own; Windows composes them with the following base letter, or emits a
+// spacing glyph when followed by Space.
+//
+//	acute/grave    -> OEM_4, HID 0x2F (US '[' position)
+//	tilde/circumflex -> OEM_7, HID 0x34 (US '\'' position)
+//	diaeresis      -> Shift + '6', HID 0x23
+var (
+	deadAcute      = Char{ModNone, 0x2f}  // ´
+	deadGrave      = Char{ModShift, 0x2f} // `
+	deadTilde      = Char{ModNone, 0x34}  // ~
+	deadCircumflex = Char{ModShift, 0x34} // ^
+	deadDiaeresis  = Char{ModShift, 0x23} // ¨
+	keySpace       = Char{ModNone, 0x2c}
+)
+
+// CharMap maps a rune to the single HID keystroke that produces it on a target
+// running the Brazilian Portuguese ABNT / ABNT2 layout (Windows KBDBR.DLL).
+// HID codes are physical key positions, so they differ from a US keymap for
+// every symbol whose position moved between layouts.
+var CharMap = map[rune]Char{
+	// Lowercase letters (same positions as US QWERTY)
+	'a': {ModNone, 0x04}, 'b': {ModNone, 0x05}, 'c': {ModNone, 0x06}, 'd': {ModNone, 0x07},
+	'e': {ModNone, 0x08}, 'f': {ModNone, 0x09}, 'g': {ModNone, 0x0a}, 'h': {ModNone, 0x0b},
+	'i': {ModNone, 0x0c}, 'j': {ModNone, 0x0d}, 'k': {ModNone, 0x0e}, 'l': {ModNone, 0x0f},
+	'm': {ModNone, 0x10}, 'n': {ModNone, 0x11}, 'o': {ModNone, 0x12}, 'p': {ModNone, 0x13},
+	'q': {ModNone, 0x14}, 'r': {ModNone, 0x15}, 's': {ModNone, 0x16}, 't': {ModNone, 0x17},
+	'u': {ModNone, 0x18}, 'v': {ModNone, 0x19}, 'w': {ModNone, 0x1a}, 'x': {ModNone, 0x1b},
+	'y': {ModNone, 0x1c}, 'z': {ModNone, 0x1d},
+
+	// Uppercase letters (Shift + base)
+	'A': {ModShift, 0x04}, 'B': {ModShift, 0x05}, 'C': {ModShift, 0x06}, 'D': {ModShift, 0x07},
+	'E': {ModShift, 0x08}, 'F': {ModShift, 0x09}, 'G': {ModShift, 0x0a}, 'H': {ModShift, 0x0b},
+	'I': {ModShift, 0x0c}, 'J': {ModShift, 0x0d}, 'K': {ModShift, 0x0e}, 'L': {ModShift, 0x0f},
+	'M': {ModShift, 0x10}, 'N': {ModShift, 0x11}, 'O': {ModShift, 0x12}, 'P': {ModShift, 0x13},
+	'Q': {ModShift, 0x14}, 'R': {ModShift, 0x15}, 'S': {ModShift, 0x16}, 'T': {ModShift, 0x17},
+	'U': {ModShift, 0x18}, 'V': {ModShift, 0x19}, 'W': {ModShift, 0x1a}, 'X': {ModShift, 0x1b},
+	'Y': {ModShift, 0x1c}, 'Z': {ModShift, 0x1d},
+
+	// Cedilla — dedicated ABNT key (OEM_1, HID 0x33, US ';' position)
+	'ç': {ModNone, 0x33},
+	'Ç': {ModShift, 0x33},
 
 	// Numbers
-	'1': {0, 30}, '2': {0, 31}, '3': {0, 32}, '4': {0, 33}, '5': {0, 34},
-	'6': {0, 35}, '7': {0, 36}, '8': {0, 37}, '9': {0, 38}, '0': {0, 39},
+	'1': {ModNone, 0x1e}, '2': {ModNone, 0x1f}, '3': {ModNone, 0x20}, '4': {ModNone, 0x21},
+	'5': {ModNone, 0x22}, '6': {ModNone, 0x23}, '7': {ModNone, 0x24}, '8': {ModNone, 0x25},
+	'9': {ModNone, 0x26}, '0': {ModNone, 0x27},
 
-	// Shifted numbers / Symbols
-	'!': {2, 30}, // Shift + 1
-	'@': {2, 31}, // Shift + 2
-	'#': {2, 32}, // Shift + 3
-	'$': {2, 33}, // Shift + 4
-	'%': {2, 34}, // Shift + 5
-	'^': {2, 35}, // Shift + 6
-	'&': {2, 36}, // Shift + 7
-	'*': {2, 37}, // Shift + 8
-	'(': {2, 38}, // Shift + 9
-	')': {2, 39}, // Shift + 0
+	// Shifted number row (ABNT: matches US except '6', which is the diaeresis dead key)
+	'!': {ModShift, 0x1e}, // Shift + 1
+	'@': {ModShift, 0x1f}, // Shift + 2
+	'#': {ModShift, 0x20}, // Shift + 3
+	'$': {ModShift, 0x21}, // Shift + 4
+	'%': {ModShift, 0x22}, // Shift + 5
+	'&': {ModShift, 0x24}, // Shift + 7
+	'*': {ModShift, 0x25}, // Shift + 8
+	'(': {ModShift, 0x26}, // Shift + 9
+	')': {ModShift, 0x27}, // Shift + 0
 
-	// Other common characters
-	'\n': {0, 40}, // Enter (Return)
-	'\t': {0, 43}, // Tab
-	' ':  {0, 44}, // Space
-	'-':  {0, 45}, // Hyphen / Minus
-	'=':  {0, 46}, // Equals
-	'[':  {0, 47}, // Left Square Bracket
-	']':  {0, 48}, // Right Square Bracket
-	'\\': {0, 49}, // Backslash
+	// Minus / equals (OEM_MINUS 0x2D, OEM_PLUS 0x2E)
+	'-': {ModNone, 0x2d}, '_': {ModShift, 0x2d},
+	'=': {ModNone, 0x2e}, '+': {ModShift, 0x2e},
 
-	';':  {0, 51}, // Semicolon
-	'\'': {0, 52}, // Apostrophe / Single Quote
-	'`':  {0, 53}, // Grave Accent / Backtick
-	',':  {0, 54}, // Comma
-	'.':  {0, 55}, // Period / Dot
-	'/':  {0, 56}, // Slash
+	// Quotes — OEM_3 (HID 0x35, US backtick position) on ABNT
+	'\'': {ModNone, 0x35},  // apostrophe
+	'"':  {ModShift, 0x35}, // double quote
 
-	// Shifted symbols
-	'_': {2, 45}, // Underscore (Shift + Hyphen)
-	'+': {2, 46}, // Plus (Shift + Equals)
-	'{': {2, 47}, // Left Curly Brace (Shift + Left Square Bracket)
-	'}': {2, 48}, // Right Curly Brace (Shift + Right Square Bracket)
-	'|': {2, 49}, // Pipe (Shift + Backslash)
+	// Brackets / braces — OEM_6 (0x30) and OEM_5 (0x31)
+	'[': {ModNone, 0x30}, '{': {ModShift, 0x30},
+	']': {ModNone, 0x31}, '}': {ModShift, 0x31},
 
-	':': {2, 51}, // Colon (Shift + Semicolon)
-	'"': {2, 52}, // Double Quote (Shift + Apostrophe)
-	'~': {2, 53}, // Tilde (Shift + Grave Accent)
-	'<': {2, 54}, // Less Than (Shift + Comma)
-	'>': {2, 55}, // Greater Than (Shift + Period)
-	'?': {2, 56}, // Question Mark (Shift + Slash)
+	// Backslash / pipe — OEM_102 (HID 0x64, ISO key left of Z)
+	'\\': {ModNone, 0x64},
+	'|':  {ModShift, 0x64},
+
+	// Comma / period (OEM_COMMA 0x36, OEM_PERIOD 0x37)
+	',': {ModNone, 0x36}, '<': {ModShift, 0x36},
+	'.': {ModNone, 0x37}, '>': {ModShift, 0x37},
+
+	// Semicolon / colon — OEM_2 (HID 0x38, US '/' position) on ABNT
+	';': {ModNone, 0x38},
+	':': {ModShift, 0x38},
+
+	// Slash / question — ABNT_C1 (HID 0x87, International1)
+	'/': {ModNone, 0x87},
+	'?': {ModShift, 0x87},
+
+	// Ordinal indicators — AltGr layer
+	'ª': {ModAltGr, 0x30},
+	'º': {ModAltGr, 0x31},
+
+	// Whitespace
+	' ':  {ModNone, 0x2c}, // Space
+	'\n': {ModNone, 0x28}, // Enter
+	'\t': {ModNone, 0x2b}, // Tab
+}
+
+// ComposedMap maps an accented rune (or a standalone dead-key glyph) to the
+// keystroke sequence that produces it on the ABNT layout: a dead key followed
+// by the base letter, or by Space for the spacing glyph.
+var ComposedMap = map[rune][]Char{
+	// Acute
+	'á': {deadAcute, {ModNone, 0x04}},
+	'é': {deadAcute, {ModNone, 0x08}},
+	'í': {deadAcute, {ModNone, 0x0c}},
+	'ó': {deadAcute, {ModNone, 0x12}},
+	'ú': {deadAcute, {ModNone, 0x18}},
+	'Á': {deadAcute, {ModShift, 0x04}},
+	'É': {deadAcute, {ModShift, 0x08}},
+	'Í': {deadAcute, {ModShift, 0x0c}},
+	'Ó': {deadAcute, {ModShift, 0x12}},
+	'Ú': {deadAcute, {ModShift, 0x18}},
+
+	// Tilde
+	'ã': {deadTilde, {ModNone, 0x04}},
+	'õ': {deadTilde, {ModNone, 0x12}},
+	'ñ': {deadTilde, {ModNone, 0x11}},
+	'Ã': {deadTilde, {ModShift, 0x04}},
+	'Õ': {deadTilde, {ModShift, 0x12}},
+	'Ñ': {deadTilde, {ModShift, 0x11}},
+
+	// Circumflex
+	'â': {deadCircumflex, {ModNone, 0x04}},
+	'ê': {deadCircumflex, {ModNone, 0x08}},
+	'î': {deadCircumflex, {ModNone, 0x0c}},
+	'ô': {deadCircumflex, {ModNone, 0x12}},
+	'û': {deadCircumflex, {ModNone, 0x18}},
+	'Â': {deadCircumflex, {ModShift, 0x04}},
+	'Ê': {deadCircumflex, {ModShift, 0x08}},
+	'Ô': {deadCircumflex, {ModShift, 0x12}},
+
+	// Grave
+	'à': {deadGrave, {ModNone, 0x04}},
+	'è': {deadGrave, {ModNone, 0x08}},
+	'ò': {deadGrave, {ModNone, 0x12}},
+	'À': {deadGrave, {ModShift, 0x04}},
+
+	// Diaeresis
+	'ü': {deadDiaeresis, {ModNone, 0x18}},
+	'Ü': {deadDiaeresis, {ModShift, 0x18}},
+
+	// Standalone dead-key glyphs (dead key + Space)
+	'´': {deadAcute, keySpace},
+	'`': {deadGrave, keySpace},
+	'~': {deadTilde, keySpace},
+	'^': {deadCircumflex, keySpace},
+	'¨': {deadDiaeresis, keySpace},
 }
