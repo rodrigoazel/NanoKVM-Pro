@@ -151,9 +151,13 @@ var CharMap = map[rune]Char{
 	';': {ModNone, 0x38},
 	':': {ModShift, 0x38},
 
-	// Slash / question — ABNT_C1 (HID 0x87, International1)
-	'/': {ModNone, 0x87},
-	'?': {ModShift, 0x87},
+	// Slash / question — AltGr layer of Q / W (keycodes 0x14 / 0x1a).
+	// The dedicated ABNT key for these is International1 (HID 0x87), but some
+	// USB-gadget keyboard report descriptors cap the key-array Usage Maximum at
+	// 0x65, which would silently drop 0x87. AltGr+Q / AltGr+W produce the same
+	// glyphs on KBDBR while staying inside the always-supported keycode range.
+	'/': {ModAltGr, 0x14}, // AltGr + Q
+	'?': {ModAltGr, 0x1a}, // AltGr + W
 
 	// Ordinal indicators — AltGr layer
 	'ª': {ModAltGr, 0x30},
